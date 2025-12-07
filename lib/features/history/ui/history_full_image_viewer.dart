@@ -3,7 +3,6 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
-import 'dart:math';
 
 class FullImageViewer extends StatefulWidget {
   final List<File> images;
@@ -44,8 +43,8 @@ class _FullImageViewerState extends State<FullImageViewer>
     _currentIndexNotifier = ValueNotifier(widget.initialIndex);
     _pageController = PageController(initialPage: widget.initialIndex);
     _controllers = List.generate(
-        widget.images.length,
-            (_) => TransformationController()
+      widget.images.length,
+          (_) => TransformationController(),
     );
 
     _appBarAnimationController = AnimationController(
@@ -90,25 +89,16 @@ class _FullImageViewerState extends State<FullImageViewer>
     }
   }
 
-  // Enhanced precaching with extended range and caching strategy
   void _precacheAdjacentImages(int currentIndex) {
     final len = widget.images.length;
-
-    // Precache range: current ± 2 images for smoother scrolling
     final indicesToCache = <int>[];
 
-    // Add current image
     indicesToCache.add(currentIndex);
-
-    // Add previous images (up to 2)
     if (currentIndex > 0) indicesToCache.add(currentIndex - 1);
     if (currentIndex > 1) indicesToCache.add(currentIndex - 2);
-
-    // Add next images (up to 2)
     if (currentIndex < len - 1) indicesToCache.add(currentIndex + 1);
     if (currentIndex < len - 2) indicesToCache.add(currentIndex + 2);
 
-    // Precache images that haven't been cached yet
     for (final index in indicesToCache) {
       if (!_precachedIndices.contains(index)) {
         final imageProvider = FileImage(widget.images[index]);
@@ -122,16 +112,13 @@ class _FullImageViewerState extends State<FullImageViewer>
       }
     }
 
-    // Clean up cache for distant images to save memory
     _cleanupDistantCache(currentIndex);
   }
 
-  // Remove cached images that are too far from current position
   void _cleanupDistantCache(int currentIndex) {
     final indicesToRemove = <int>[];
 
     for (final cachedIndex in _imageCache.keys) {
-      // Keep images within ±3 range
       if ((cachedIndex - currentIndex).abs() > 3) {
         indicesToRemove.add(cachedIndex);
       }
@@ -197,7 +184,6 @@ class _FullImageViewerState extends State<FullImageViewer>
     try {
       await imageFile.rename(newPath);
 
-      // Clean up cache for deleted image
       _imageCache.remove(idx);
       _precachedIndices.remove(idx);
 
@@ -212,8 +198,6 @@ class _FullImageViewerState extends State<FullImageViewer>
         _currentIndexNotifier.value = newIdx;
         setState(() {});
         _pageController.jumpToPage(newIdx);
-
-        // Recache after deletion
         _precacheAdjacentImages(newIdx);
       }
 
@@ -278,17 +262,82 @@ class _FullImageViewerState extends State<FullImageViewer>
     );
   }
 
-  void _onScaleUpdate(
+  void _onInteractionUpdate(
       ScaleUpdateDetails details,
       TransformationController controller,
       ) {
     final scale = controller.value.getMaxScaleOnAxis();
     final newIsZoomed = scale > 1.1;
+
     if (newIsZoomed != _isZoomed) {
       setState(() {
         _isZoomed = newIsZoomed;
+        // Hide controls when zooming
+        if (_isZoomed && _showControls) {
+          _showControls = false;
+          _appBarAnimationController.reverse();
+        }
       });
     }
+  }
+
+  void _onInteractionEnd(ScaleEndDetails details, int index) {
+    final controller = _controllers[index];
+    final scale = controller.value.getMaxScaleOnAxis();
+
+    // Auto-reset zoom if scale is close to 1.0
+    if (scale < 1.05 && scale > 0.95) {
+      controller.value = Matrix4.identity();
+      setState(() {
+        _isZoomed = false;
+        // Show controls after zoom reset
+        if (!_showControls) {
+          _showControls = true;
+          _appBarAnimationController.forward();
+        }
+      });
+    }
+  }
+
+  void _animatedZoom(int index, double targetScale, Offset focalPoint) {
+    final controller = _controllers[index];
+
+    final begin = controller.value;
+    final end = targetScale == 1.0
+        ? Matrix4.identity()
+        : Matrix4.identity()
+      ..translate(focalPoint.dx, focalPoint.dy)
+      ..scale(targetScale)
+      ..translate(-focalPoint.dx, -focalPoint.dy);
+
+    final animController = AnimationController(
+      duration: const Duration(milliseconds: 250),
+      vsync: this,
+    );
+
+    final animation = Matrix4Tween(begin: begin, end: end).animate(
+      CurvedAnimation(parent: animController, curve: Curves.easeOut),
+    );
+
+    animation.addListener(() {
+      controller.value = animation.value;
+    });
+
+    animController.forward().then((_) {
+      animController.dispose();
+      setState(() {
+        _isZoomed = targetScale > 1.0;
+        if (_isZoomed && _showControls) {
+          _showControls = false;
+          _appBarAnimationController.reverse();
+        } else if (!_isZoomed && !_showControls) {
+          _showControls = true;
+          _appBarAnimationController.forward();
+        }
+      });
+    });
+
+    HapticFeedback.mediumImpact();
   }
 
   @override
@@ -301,7 +350,8 @@ class _FullImageViewerState extends State<FullImageViewer>
       body: Stack(
         children: [
           _buildImagePageView(),
-          if (_showControls) _buildBottomControls(color), // <-- USE NEW METHOD
+          if (_showControls && !_isZoomed) _buildNavigationButtons(),
+          if (_showControls) _buildBottomInfo(color),
         ],
       ),
     );
@@ -363,214 +413,6 @@ class _FullImageViewerState extends State<FullImageViewer>
     );
   }
 
-  Widget _buildBottomControls(ColorScheme color) {
-    return AnimatedBuilder(
-      animation: _appBarAnimation,
-      builder: (context, child) {
-        return Positioned(
-          bottom: MediaQuery.of(context).padding.bottom + 16,
-          left: 16,
-          right: 16,
-          child: Transform.translate(
-            offset: Offset(0, 100 * (1 - _appBarAnimation.value)),
-            child: Opacity(
-              opacity: _appBarAnimation.value,
-              child: ValueListenableBuilder<int>(
-                valueListenable: _currentIndexNotifier,
-                builder: (context, index, child) {
-                  final fileName = widget.images[index].path.split('/').last;
-                  final totalImages = widget.images.length;
-
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Part 1: File Info Box (from your original _buildBottomInfo)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.3),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.1),
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Icon(
-                                    Icons.image_rounded,
-                                    color: Colors.white70,
-                                    size: 20,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        fileName,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      FutureBuilder<int>(
-                                        future: widget.images[index].length(),
-                                        builder: (context, snapshot) {
-                                          if (snapshot.hasData) {
-                                            final sizeKB =
-                                            (snapshot.data! / 1024)
-                                                .toStringAsFixed(1);
-                                            return Text(
-                                              '$sizeKB KB',
-                                              style: TextStyle(
-                                                color: Colors.white
-                                                    .withOpacity(0.7),
-                                                fontSize: 12,
-                                              ),
-                                            );
-                                          }
-                                          return const SizedBox.shrink();
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      // Part 2: Navigation Slider (Inspired by PixChive)
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.3),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.1),
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.skip_previous_rounded,
-                                    color: index > 0
-                                        ? Colors.white
-                                        : Colors.white.withOpacity(0.3),
-                                  ),
-                                  onPressed: index > 0
-                                      ? () {
-                                    _pageController.previousPage(
-                                      duration: const Duration(
-                                          milliseconds: 300),
-                                      curve: Curves.easeOutCubic,
-                                    );
-                                  }
-                                      : null,
-                                ),
-                                // --- FIX HERE ---
-                                SizedBox(
-                                  width: 32,
-                                  child: Center(
-                                    child: Text(
-                                      "${index + 1}",
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Slider(
-                                    value: index.toDouble(),
-                                    min: 0,
-                                    max: (totalImages - 1).toDouble(),
-                                    // --- FIX HERE ---
-                                    divisions: max(totalImages - 1, 1).toInt(),
-                                    activeColor:
-                                    Theme.of(context).colorScheme.primary,
-                                    inactiveColor:
-                                    Colors.white.withOpacity(0.3),
-                                    onChanged: (value) {
-                                      _pageController
-                                          .jumpToPage(value.toInt());
-                                    },
-                                  ),
-                                ),
-                                // --- FIX HERE ---
-                                SizedBox(
-                                  width: 32,
-                                  child: Center(
-                                    child: Text(
-                                      "$totalImages",
-                                      style: TextStyle(
-                                        color: Colors.white.withOpacity(0.7),
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.skip_next_rounded,
-                                    color: index < totalImages - 1
-                                        ? Colors.white
-                                        : Colors.white.withOpacity(0.3),
-                                  ),
-                                  onPressed: index < totalImages - 1
-                                      ? () {
-                                    _pageController.nextPage(
-                                      duration: const Duration(
-                                          milliseconds: 300),
-                                      curve: Curves.easeOutCubic,
-                                    );
-                                  }
-                                      : null,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Widget _buildGlassButton({
     required IconData icon,
     required VoidCallback onPressed,
@@ -610,16 +452,23 @@ class _FullImageViewerState extends State<FullImageViewer>
         _isPageTransitioning = true;
         _currentIndexNotifier.value = i;
 
-        // Reset zoom for current page
-        _controllers[i].value = Matrix4.identity();
+        // Reset zoom for all pages
+        for (int j = 0; j < _controllers.length; j++) {
+          if (j != i) {
+            _controllers[j].value = Matrix4.identity();
+          }
+        }
 
         setState(() {
           _isZoomed = false;
+          if (!_showControls) {
+            _showControls = true;
+            _appBarAnimationController.forward();
+          }
         });
 
         HapticFeedback.selectionClick();
 
-        // Precache adjacent images
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _precacheAdjacentImages(i);
           _isPageTransitioning = false;
@@ -631,41 +480,35 @@ class _FullImageViewerState extends State<FullImageViewer>
         return InteractiveViewer(
           transformationController: controller,
           minScale: 1.0,
-          maxScale: 4.0,
-          panEnabled: true,
+          maxScale: 5.0,
+          panEnabled: _isZoomed,
           scaleEnabled: true,
-          onInteractionStart: (details) {
-            if (details.pointerCount == 1) {
-              _toggleControls();
-            }
-          },
-          onInteractionUpdate: (details) => _onScaleUpdate(details, controller),
+          constrained: true,
+          onInteractionUpdate: (details) =>
+              _onInteractionUpdate(details, controller),
+          onInteractionEnd: (details) => _onInteractionEnd(details, index),
           child: GestureDetector(
-            onDoubleTap: () {
-              HapticFeedback.mediumImpact();
-              final size = MediaQuery.of(context).size;
-              final matrix = controller.value;
-              final currentScale = matrix.getMaxScaleOnAxis();
-              final targetScale = currentScale > 1.5 ? 1.0 : 2.5;
-
-              if (targetScale == 1.0) {
-                controller.value = Matrix4.identity();
-              } else {
-                final x = size.width / 2;
-                final y = size.height / 2;
-                controller.value = Matrix4.identity()
-                  ..translate(x)
-                  ..scale(targetScale)
-                  ..translate(-x);
+            behavior: HitTestBehavior.translucent,
+            onTap: () {
+              // Only toggle controls when not zoomed
+              if (!_isZoomed) {
+                _toggleControls();
               }
+            },
+            onDoubleTapDown: (details) {
+              // Get the position relative to the screen
+              final RenderBox box = context.findRenderObject() as RenderBox;
+              final localPosition = box.globalToLocal(details.globalPosition);
 
-              setState(() {
-                _isZoomed = targetScale > 1.0;
-              });
+              final currentScale = controller.value.getMaxScaleOnAxis();
+              final targetScale = currentScale > 1.5 ? 1.0 : 2.5;
+              _animatedZoom(index, targetScale, localPosition);
             },
             child: Hero(
               tag: widget.images[index].path,
-              child: _buildCachedImage(index),
+              child: Center(
+                child: _buildCachedImage(index),
+              ),
             ),
           ),
         );
@@ -673,7 +516,6 @@ class _FullImageViewerState extends State<FullImageViewer>
     );
   }
 
-  // Build image with caching support
   Widget _buildCachedImage(int index) {
     final imageProvider = _imageCache[index] ?? FileImage(widget.images[index]);
 
@@ -687,7 +529,6 @@ class _FullImageViewerState extends State<FullImageViewer>
             return child;
           }
 
-          // Show loading indicator while image loads
           return AnimatedOpacity(
             opacity: frame == null ? 0.0 : 1.0,
             duration: const Duration(milliseconds: 300),
@@ -698,7 +539,8 @@ class _FullImageViewerState extends State<FullImageViewer>
               child: const Center(
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white70),
+                  valueColor:
+                  AlwaysStoppedAnimation<Color>(Colors.white70),
                 ),
               ),
             )
@@ -862,24 +704,36 @@ class _FullImageViewerState extends State<FullImageViewer>
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                  FutureBuilder<int>(
-                                    future: widget.images[index].length(),
-                                    builder: (context, snapshot) {
-                                      if (snapshot.hasData) {
-                                        final sizeKB =
-                                        (snapshot.data! / 1024)
-                                            .toStringAsFixed(1);
-                                        return Text(
-                                          '$sizeKB KB',
-                                          style: TextStyle(
-                                            color:
-                                            Colors.white.withOpacity(0.7),
-                                            fontSize: 12,
-                                          ),
-                                        );
-                                      }
-                                      return const SizedBox.shrink();
-                                    },
+                                  Row(
+                                    children: [
+                                      FutureBuilder<int>(
+                                        future: widget.images[index].length(),
+                                        builder: (context, snapshot) {
+                                          if (snapshot.hasData) {
+                                            final sizeKB =
+                                            (snapshot.data! / 1024)
+                                                .toStringAsFixed(1);
+                                            return Text(
+                                              '$sizeKB KB',
+                                              style: TextStyle(
+                                                color: Colors.white
+                                                    .withOpacity(0.7),
+                                                fontSize: 12,
+                                              ),
+                                            );
+                                          }
+                                          return const SizedBox.shrink();
+                                        },
+                                      ),
+                                      Text(
+                                        ' • Tap: controls • Double tap: zoom',
+                                        style: TextStyle(
+                                          color: Colors.blue[300],
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
