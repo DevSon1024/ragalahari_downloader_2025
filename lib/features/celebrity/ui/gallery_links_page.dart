@@ -76,17 +76,18 @@ class _GalleryLinksPageState extends State<GalleryLinksPage> {
   String? _error;
   int _currentPage = 1;
   final int _itemsPerPage = 30;
-  bool _sortNewestFirst = true;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
   Set<int> _loadingPages = {};
   Set<int> _loadedPages = {};
+  bool _isCelebrityFavorite = false;
 
   @override
   void initState() {
     super.initState();
     _loadAllData();
     _searchController.addListener(_filterGalleries);
+    _checkCelebrityFavorite();
   }
 
   @override
@@ -94,6 +95,92 @@ class _GalleryLinksPageState extends State<GalleryLinksPage> {
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkCelebrityFavorite() async {
+    final isFav = await _isCelebrityInFavorites();
+    setState(() {
+      _isCelebrityFavorite = isFav;
+    });
+  }
+
+  Future<bool> _isCelebrityInFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favoriteKey = 'favorites';
+    final favoritesJson = prefs.getStringList(favoriteKey) ?? [];
+    final favorites = favoritesJson
+        .map((json) => FavoriteItem.fromJson(
+      Map<String, String>.from(jsonDecode(json) as Map<String, dynamic>),
+    ))
+        .toList();
+    return favorites.any(
+          (item) =>
+      item.type == 'celebrity' &&
+          item.name == widget.celebrityName &&
+          item.url == widget.profileUrl,
+    );
+  }
+
+  Future<void> _toggleCelebrityFavorite() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favoriteKey = 'favorites';
+    List<String> favoritesJson = prefs.getStringList(favoriteKey) ?? [];
+    List<FavoriteItem> favorites = favoritesJson
+        .map((json) => FavoriteItem.fromJson(
+      Map<String, String>.from(jsonDecode(json) as Map<String, dynamic>),
+    ))
+        .toList();
+
+    final favoriteItem = FavoriteItem(
+      type: 'celebrity',
+      name: widget.celebrityName,
+      url: widget.profileUrl,
+      thumbnailUrl: null,
+      celebrityName: widget.celebrityName,
+    );
+
+    final isFavorite = favorites.any(
+          (fav) =>
+      fav.type == 'celebrity' &&
+          fav.name == widget.celebrityName &&
+          fav.url == widget.profileUrl,
+    );
+
+    if (isFavorite) {
+      favorites.removeWhere(
+            (fav) =>
+        fav.type == 'celebrity' &&
+            fav.name == widget.celebrityName &&
+            fav.url == widget.profileUrl,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${widget.celebrityName} removed from favorites'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } else {
+      favorites.add(favoriteItem);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${widget.celebrityName} added to favorites'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+
+    await prefs.setStringList(
+      favoriteKey,
+      favorites.map((item) => jsonEncode(item.toJson())).toList(),
+    );
+
+    setState(() {
+      _isCelebrityFavorite = !isFavorite;
+    });
   }
 
   Future<void> _loadAllData() async {
@@ -483,7 +570,7 @@ class _GalleryLinksPageState extends State<GalleryLinksPage> {
         _filteredUrls = _allGalleryUrls.where((url) {
           final galleryId = url
               .split('/')
-              .where((segment) => RegExp(r'^\d+\$').hasMatch(segment))
+              .where((segment) => RegExp(r'^\d+$').hasMatch(segment))
               .firstOrNull;
           return galleryId != null && galleryId.startsWith(query);
         }).toList();
@@ -499,22 +586,6 @@ class _GalleryLinksPageState extends State<GalleryLinksPage> {
       _currentPage = page;
     });
     _loadPageItems(page);
-  }
-
-  void _toggleSortOrder() {
-    setState(() {
-      _sortNewestFirst = !_sortNewestFirst;
-
-      // Sort loaded items
-      final sortedEntries = _loadedItems.entries.toList()
-        ..sort((a, b) => _sortNewestFirst
-            ? b.value.date.compareTo(a.value.date)
-            : a.value.date.compareTo(b.value.date));
-
-      _loadedItems = Map.fromEntries(sortedEntries);
-      _currentPage = 1;
-      _loadedPages.clear();
-    });
   }
 
   Widget _buildGalleryCard(String url, {bool isPlaceholder = false}) {
@@ -762,10 +833,13 @@ class _GalleryLinksPageState extends State<GalleryLinksPage> {
         actions: [
           IconButton(
             icon: Icon(
-              _sortNewestFirst ? Icons.arrow_downward : Icons.arrow_upward,
+              _isCelebrityFavorite ? Icons.star : Icons.star_border,
+              color: _isCelebrityFavorite ? Colors.amber : null,
             ),
-            tooltip: _sortNewestFirst ? 'Sort Oldest First' : 'Sort Newest First',
-            onPressed: _toggleSortOrder,
+            tooltip: _isCelebrityFavorite
+                ? 'Remove from Favorites'
+                : 'Add to Favorites',
+            onPressed: _toggleCelebrityFavorite,
           ),
         ],
         bottom: PreferredSize(

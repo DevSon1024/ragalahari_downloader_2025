@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'dart:math';
 
 class FullImageViewer extends StatefulWidget {
   final List<File> images;
@@ -300,8 +301,7 @@ class _FullImageViewerState extends State<FullImageViewer>
       body: Stack(
         children: [
           _buildImagePageView(),
-          if (_showControls && !_isZoomed) _buildNavigationButtons(),
-          if (_showControls) _buildBottomInfo(color),
+          if (_showControls) _buildBottomControls(color), // <-- USE NEW METHOD
         ],
       ),
     );
@@ -360,6 +360,214 @@ class _FullImageViewerState extends State<FullImageViewer>
           );
         },
       ),
+    );
+  }
+
+  Widget _buildBottomControls(ColorScheme color) {
+    return AnimatedBuilder(
+      animation: _appBarAnimation,
+      builder: (context, child) {
+        return Positioned(
+          bottom: MediaQuery.of(context).padding.bottom + 16,
+          left: 16,
+          right: 16,
+          child: Transform.translate(
+            offset: Offset(0, 100 * (1 - _appBarAnimation.value)),
+            child: Opacity(
+              opacity: _appBarAnimation.value,
+              child: ValueListenableBuilder<int>(
+                valueListenable: _currentIndexNotifier,
+                builder: (context, index, child) {
+                  final fileName = widget.images[index].path.split('/').last;
+                  final totalImages = widget.images.length;
+
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Part 1: File Info Box (from your original _buildBottomInfo)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.1),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.image_rounded,
+                                    color: Colors.white70,
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        fileName,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 14,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      FutureBuilder<int>(
+                                        future: widget.images[index].length(),
+                                        builder: (context, snapshot) {
+                                          if (snapshot.hasData) {
+                                            final sizeKB =
+                                            (snapshot.data! / 1024)
+                                                .toStringAsFixed(1);
+                                            return Text(
+                                              '$sizeKB KB',
+                                              style: TextStyle(
+                                                color: Colors.white
+                                                    .withOpacity(0.7),
+                                                fontSize: 12,
+                                              ),
+                                            );
+                                          }
+                                          return const SizedBox.shrink();
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Part 2: Navigation Slider (Inspired by PixChive)
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.1),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.skip_previous_rounded,
+                                    color: index > 0
+                                        ? Colors.white
+                                        : Colors.white.withOpacity(0.3),
+                                  ),
+                                  onPressed: index > 0
+                                      ? () {
+                                    _pageController.previousPage(
+                                      duration: const Duration(
+                                          milliseconds: 300),
+                                      curve: Curves.easeOutCubic,
+                                    );
+                                  }
+                                      : null,
+                                ),
+                                // --- FIX HERE ---
+                                SizedBox(
+                                  width: 32,
+                                  child: Center(
+                                    child: Text(
+                                      "${index + 1}",
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Slider(
+                                    value: index.toDouble(),
+                                    min: 0,
+                                    max: (totalImages - 1).toDouble(),
+                                    // --- FIX HERE ---
+                                    divisions: max(totalImages - 1, 1).toInt(),
+                                    activeColor:
+                                    Theme.of(context).colorScheme.primary,
+                                    inactiveColor:
+                                    Colors.white.withOpacity(0.3),
+                                    onChanged: (value) {
+                                      _pageController
+                                          .jumpToPage(value.toInt());
+                                    },
+                                  ),
+                                ),
+                                // --- FIX HERE ---
+                                SizedBox(
+                                  width: 32,
+                                  child: Center(
+                                    child: Text(
+                                      "$totalImages",
+                                      style: TextStyle(
+                                        color: Colors.white.withOpacity(0.7),
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.skip_next_rounded,
+                                    color: index < totalImages - 1
+                                        ? Colors.white
+                                        : Colors.white.withOpacity(0.3),
+                                  ),
+                                  onPressed: index < totalImages - 1
+                                      ? () {
+                                    _pageController.nextPage(
+                                      duration: const Duration(
+                                          milliseconds: 300),
+                                      curve: Curves.easeOutCubic,
+                                    );
+                                  }
+                                      : null,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
