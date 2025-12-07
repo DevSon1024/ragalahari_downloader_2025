@@ -272,7 +272,6 @@ class _FullImageViewerState extends State<FullImageViewer>
     if (newIsZoomed != _isZoomed) {
       setState(() {
         _isZoomed = newIsZoomed;
-        // Hide controls when zooming
         if (_isZoomed && _showControls) {
           _showControls = false;
           _appBarAnimationController.reverse();
@@ -285,12 +284,10 @@ class _FullImageViewerState extends State<FullImageViewer>
     final controller = _controllers[index];
     final scale = controller.value.getMaxScaleOnAxis();
 
-    // Auto-reset zoom if scale is close to 1.0
     if (scale < 1.05 && scale > 0.95) {
       controller.value = Matrix4.identity();
       setState(() {
         _isZoomed = false;
-        // Show controls after zoom reset
         if (!_showControls) {
           _showControls = true;
           _appBarAnimationController.forward();
@@ -299,16 +296,23 @@ class _FullImageViewerState extends State<FullImageViewer>
     }
   }
 
-  void _animatedZoom(int index, double targetScale, Offset focalPoint) {
+  void _handleDoubleTap(int index) {
     final controller = _controllers[index];
+    final currentScale = controller.value.getMaxScaleOnAxis();
+    final targetScale = currentScale > 1.5 ? 1.0 : 2.5;
+
+    // Get screen center for zoom
+    final size = MediaQuery.of(context).size;
+    final centerX = size.width / 2;
+    final centerY = size.height / 2;
 
     final begin = controller.value;
     final end = targetScale == 1.0
         ? Matrix4.identity()
         : Matrix4.identity()
-      ..translate(focalPoint.dx, focalPoint.dy)
+      ..translate(centerX, centerY)
       ..scale(targetScale)
-      ..translate(-focalPoint.dx, -focalPoint.dy);
+      ..translate(-centerX, -centerY);
 
     final animController = AnimationController(
       duration: const Duration(milliseconds: 250),
@@ -452,7 +456,7 @@ class _FullImageViewerState extends State<FullImageViewer>
         _isPageTransitioning = true;
         _currentIndexNotifier.value = i;
 
-        // Reset zoom for all pages
+        // Reset zoom for all other pages
         for (int j = 0; j < _controllers.length; j++) {
           if (j != i) {
             _controllers[j].value = Matrix4.identity();
@@ -475,44 +479,43 @@ class _FullImageViewerState extends State<FullImageViewer>
         });
       },
       itemBuilder: (context, index) {
-        final controller = _controllers[index];
-
-        return InteractiveViewer(
-          transformationController: controller,
-          minScale: 1.0,
-          maxScale: 5.0,
-          panEnabled: _isZoomed,
-          scaleEnabled: true,
-          constrained: true,
-          onInteractionUpdate: (details) =>
-              _onInteractionUpdate(details, controller),
-          onInteractionEnd: (details) => _onInteractionEnd(details, index),
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: () {
-              // Only toggle controls when not zoomed
-              if (!_isZoomed) {
-                _toggleControls();
-              }
-            },
-            onDoubleTapDown: (details) {
-              // Get the position relative to the screen
-              final RenderBox box = context.findRenderObject() as RenderBox;
-              final localPosition = box.globalToLocal(details.globalPosition);
-
-              final currentScale = controller.value.getMaxScaleOnAxis();
-              final targetScale = currentScale > 1.5 ? 1.0 : 2.5;
-              _animatedZoom(index, targetScale, localPosition);
-            },
-            child: Hero(
-              tag: widget.images[index].path,
-              child: Center(
-                child: _buildCachedImage(index),
-              ),
-            ),
-          ),
-        );
+        return _buildImageItem(index);
       },
+    );
+  }
+
+  Widget _buildImageItem(int index) {
+    final controller = _controllers[index];
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        // Single tap - toggle controls only when not zoomed
+        if (!_isZoomed) {
+          _toggleControls();
+        }
+      },
+      onDoubleTap: () {
+        // Double tap - zoom in/out
+        _handleDoubleTap(index);
+      },
+      child: InteractiveViewer(
+        transformationController: controller,
+        minScale: 1.0,
+        maxScale: 5.0,
+        panEnabled: _isZoomed,
+        scaleEnabled: true,
+        constrained: true,
+        onInteractionUpdate: (details) =>
+            _onInteractionUpdate(details, controller),
+        onInteractionEnd: (details) => _onInteractionEnd(details, index),
+        child: Hero(
+          tag: widget.images[index].path,
+          child: Center(
+            child: _buildCachedImage(index),
+          ),
+        ),
+      ),
     );
   }
 
