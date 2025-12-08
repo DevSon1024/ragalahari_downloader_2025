@@ -32,8 +32,8 @@ android {
         applicationId = "com.devson.ragadl"
         minSdk = 25
         targetSdk = 35
-        versionCode = 301
-        versionName = "3.0.1"
+        versionCode = 310
+        versionName = "3.1.0"
         multiDexEnabled = true
     }
 
